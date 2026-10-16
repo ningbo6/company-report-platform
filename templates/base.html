@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}企业画像报告{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  {% if not public_only %}<script src="/static/app.js" defer></script>{% endif %}
+</head>
+<body>
+<header class="site-header"><a class="brand" href="/"><span class="brand-icon">企</span><span>企业画像报告<span class="brand-sub">邯郸职业技术学院 · 企业画像报告平台</span></span></a>{% if not public_only %}<nav><a href="/">报告目录</a><a href="/admin/">{{ '管理后台' if is_admin else '管理员入口' }}</a></nav>{% else %}<nav><a href="/">查询报告</a></nav>{% endif %}</header>
+<main>
+{% if cfg.qr_mode == 'test' %}<div class="test-notice"><span class="dot"></span>本地测试环境<span>正式二维码需配置长期域名，并确认高清校徽后导出。</span></div>{% endif %}
+{% if flash %}<div class="notice" role="status">{{ flash }}</div>{% endif %}
+{% block content %}{% endblock %}
+</main>
+<footer>企业画像报告 <span>企业画像报告查询与管理</span></footer>
+</body></html>

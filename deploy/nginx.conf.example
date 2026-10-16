@@ -1,0 +1,58 @@
+# 放入 Nginx http {} 内（通常为 /etc/nginx/conf.d/reports.conf）。
+# 替换域名与证书；宿主机 Nginx 仅连接 public，绝不能转发到管理端口 18889。
+# 使用真实 TCP 客户端地址；如前置 CDN，必须单独配置可信 real_ip 来源。
+limit_req_zone $binary_remote_addr zone=reports_ip:10m rate=5r/s;
+limit_req_zone $server_name zone=reports_total:1m rate=50r/s;
+limit_conn_zone $binary_remote_addr zone=reports_conn:10m;
+limit_conn_zone $server_name zone=reports_total_conn:1m;
+
+server {
+    listen 80;
+    server_name reports.example.org;
+    return 308 https://reports.example.org$request_uri;
+}
+server {
+    listen 443 ssl;
+    server_name reports.example.org;
+    ssl_certificate /etc/letsencrypt/live/reports.example.org/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/reports.example.org/privkey.pem;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    client_max_body_size 1k;
+    client_body_timeout 10s;
+    send_timeout 30s;
+    limit_req_status 429;
+    limit_conn_status 429;
+    limit_conn reports_conn 4;
+    limit_conn reports_total_conn 100;
+    limit_req zone=reports_ip burst=20 nodelay;
+    limit_req zone=reports_total burst=100 nodelay;
+
+    location ~ ^/d/[0-9]+/(file)?$ {
+        limit_except GET { deny all; } # GET 同时允许 HEAD
+        proxy_pass http://127.0.0.1:18888;
+        proxy_set_header Host $host;
+        proxy_set_header Cookie "";
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_hide_header Set-Cookie;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 60s;
+        proxy_buffering on;
+        max_ranges 1;
+    }
+    location = / {
+        limit_except GET { deny all; }
+        proxy_pass http://127.0.0.1:18888;
+        proxy_set_header Host $host;
+        proxy_set_header Cookie "";
+        proxy_hide_header Set-Cookie;
+    }
+    location = /static/style.css {
+        limit_except GET { deny all; }
+        proxy_pass http://127.0.0.1:18888;
+        proxy_set_header Cookie "";
+        proxy_hide_header Set-Cookie;
+    }
+    # 后台、二维码生成、健康信息、数据、备份及未知路径一律不公开。
+    location / { return 404; }
+}

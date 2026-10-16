@@ -1,0 +1,12 @@
+.venv
+.env
+data
+output
+backups
+本地管理员凭据.txt
+__pycache__
+**/__pycache__
+.pytest_cache
+tests
+test-results
+dist

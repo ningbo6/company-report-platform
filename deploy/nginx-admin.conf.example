@@ -1,0 +1,26 @@
+# 放入宿主机 Nginx http {}；所有示例地址、域名、证书必须替换。
+# 只绑定服务器实际内网 IP，不能改为 0.0.0.0 或省略 IP。
+# 防火墙/云安全组同时只允许管理网段访问该 IP 的 8443 端口。
+server {
+    listen 10.20.0.10:8443 ssl;
+    server_name reports-admin.internal.example.org;
+    ssl_certificate /etc/nginx/certs/reports-admin.fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/reports-admin.key;
+
+    # 改为实际办公网或 VPN 网段，不能盲目允许所有私网地址。
+    allow 10.20.0.0/24;
+    deny all;
+    client_max_body_size 1g;
+    client_body_timeout 60s;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    location / {
+        proxy_pass http://127.0.0.1:18889;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_request_buffering off;
+        proxy_read_timeout 300s;
+    }
+}

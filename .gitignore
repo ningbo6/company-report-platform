@@ -1,0 +1,15 @@
+.venv/
+.env
+data/
+output/
+backups/
+本地管理员凭据.txt
+__pycache__/
+.pytest_cache/
+test-results/
+.ruff_cache/
+.DS_Store
+dist/
+*.pem
+*.key
+deploy/certs/

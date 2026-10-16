@@ -1,0 +1,26 @@
+services:
+  app:
+    ports: !override
+      - "127.0.0.1:19889:18880"
+  public:
+    ports: !override
+      - "127.0.0.1:19888:18880"
+  gateway:
+    image: nginx:alpine
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./deploy/nginx.10.9.0.98.conf:/etc/nginx/nginx.conf:ro
+      - ./deploy/certs:/etc/nginx/certs:ro
+    depends_on:
+      app:
+        condition: service_healthy
+      public:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+    security_opt:
+      - no-new-privileges:true

@@ -1,0 +1,1 @@
+<form method="post" action="/admin/documents/{{ row.id }}/delete" data-confirm="确认删除“{{ row.title }}”（固定码 {{ '%04d'|format(row.id) }}）？报告将移入回收站，原二维码显示资料已删除。企业编号保留，不会分给其他企业，可从回收站恢复。"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="text-button danger-text" type="submit" aria-label="删除{{ row.title }}">删除</button></form>
