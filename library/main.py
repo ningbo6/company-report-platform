@@ -19,6 +19,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 from starlette.middleware.sessions import SessionMiddleware
 
+from . import __version__
 from .config import ROOT, Settings
 from .qr import export_bundle, label_image, make_code
 from .security import password_tag, verify_password
@@ -86,7 +87,7 @@ class PublicOnlyMiddleware:
     async def __call__(self, scope, receive, send):
         if scope['type'] == 'http':
             path = scope['path']
-            allowed = (re.fullmatch(r'/d/[0-9]+/(?:file)?', path)
+            allowed = (re.fullmatch(r'/d/[0-9]+/(?:file|qr\.png)?', path)
                        or path in ('/', '/static/style.css'))
             if not allowed:
                 return await Response('Not Found', status_code=404)(scope, receive, send)
@@ -129,7 +130,7 @@ class DocumentResponse(Response):
 def create_app(settings=None, *, public_only=False):
     cfg = settings or Settings.from_env()
     store = Store(cfg, initialize=not public_only)
-    app = FastAPI(title='企业画像报告', docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title='企业画像报告', version=__version__, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store = store
     app.state.cfg = cfg
     if not public_only:
@@ -207,15 +208,15 @@ def create_app(settings=None, *, public_only=False):
                 raise HTTPException(404, '资料不存在')
         return DocumentResponse(store, doc_id, download)
 
-    @app.get('/d/{doc_id}/qr.png')
+    @app.api_route('/d/{doc_id}/qr.png', methods=['GET', 'HEAD'])
     def document_qr(doc_id: int, label: bool = False, download: bool = False):
         row = store.get(doc_id)
-        if not row:
+        if not row or (public_only and row['needs_review']):
             raise HTTPException(404, '资料不存在')
         if row['deleted_at'] or not row['active']:
             raise HTTPException(410, '资料已删除' if row['deleted_at'] else '资料已下架')
         try:
-            code, _ = make_code(f'{cfg.base_url}/d/{doc_id:04d}/', cfg.logo_path)
+            code, _ = make_code(f'{store.qr_base_url()}/d/{doc_id:04d}/', cfg.logo_path)
             image = label_image(code, row['title']) if label else code
             buffer = io.BytesIO()
             image.save(buffer, format='PNG', dpi=(300, 300))
@@ -288,6 +289,28 @@ def create_app(settings=None, *, public_only=False):
                       pending=sum(not r['has_report'] for r in all_rows),
                       review_count=sum(r['needs_review'] for r in all_records))
 
+    @app.get('/admin/settings')
+    def settings_page(request: Request):
+        admin_required(request)
+        return render(request, 'settings.html', qr_base_url=store.qr_base_url(),
+                      locked_base_url=store.setting('printed_base_url'))
+
+    @app.post('/admin/settings')
+    async def save_settings(request: Request):
+        data = await form(request)
+        try:
+            value = store.validate_qr_base_url(str(data.get('qr_base_url', '')))
+            previous = str(data.get('previous_base_url', ''))
+            if value != previous and data.get('confirm_url_change') != 'yes':
+                raise ValueError('更换前缀前，请确认已下载或张贴的二维码仍可通过旧地址访问')
+            await run_in_threadpool(store.set_qr_base_url, value, previous)
+        except ValueError as exc:
+            return render(request, 'settings.html', status_code=400, qr_base_url=store.qr_base_url(),
+                          locked_base_url=store.setting('printed_base_url'), error=str(exc))
+        finally:
+            await data.close()
+        return redirect(request, '二维码地址前缀已保存，预览和新下载立即生效；请重新下载所需二维码。', '/admin/settings')
+
     @app.post('/admin/entries')
     async def create_entry(request: Request):
         data = await form(request)
@@ -330,7 +353,7 @@ def create_app(settings=None, *, public_only=False):
         if row['deleted_at']:
             return render(request, 'deleted.html', row=row)
         bindings = json.loads(store.setting('printed_company_names', '{}'))
-        return render(request, 'edit.html', row=row, fixed_url=f'{cfg.base_url}/d/{doc_id:04d}/',
+        return render(request, 'edit.html', row=row, fixed_url=f'{store.qr_base_url()}/d/{doc_id:04d}/',
                       name_locked=str(doc_id) in bindings)
 
     @app.post('/admin/documents/{doc_id}/edit')

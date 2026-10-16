@@ -84,7 +84,7 @@ def main():
     elif args.command == 'export':
         print(export_bundle(store, ROOT / 'output'))
     elif args.command == 'verify-origin':
-        url = store.cfg.base_url
+        url = store.qr_base_url()
         if not url.startswith('https://'):
             raise ValueError('正式地址必须使用 HTTPS')
         locked = store.setting('printed_base_url')

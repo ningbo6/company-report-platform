@@ -492,7 +492,7 @@ def test_public_boundary_and_private_admin_remain_separate(setup):
     with TestClient(create_public_app(store.cfg)) as public:
         assert staging.exists()
         for path in ['/admin/', '/admin/login', '/healthz', '/openapi.json',
-                     f'/d/{doc_id}/qr.png', '/static/app.js', '/.env', '/data/library.sqlite3',
+                     '/static/app.js', '/.env', '/data/library.sqlite3',
                      '/%61dmin/', '/d/1/../../admin/']:
             assert public.get(path).status_code == 404, path
         for method in ['post', 'put', 'delete']:
@@ -504,7 +504,7 @@ def test_public_boundary_and_private_admin_remain_separate(setup):
         assert 'set-cookie' not in page.headers
         assert public.get('/admin/', headers={'X-Forwarded-For': '127.0.0.1', 'Host': 'reports-admin.internal.example.org'}).status_code == 404
         assert public.get(f'/d/{doc_id}/', headers={'Cookie': 'library_session=invalid'}).status_code == 200
-        assert '/admin/' not in page.text and '/qr.png' not in page.text
+        assert '/admin/' not in page.text and '/qr.png' in page.text
         assert '返回报告查询' in page.text
         assert public.get('/static/style.css').status_code == 200
         endpoint = f'/d/{doc_id}/file'
@@ -524,6 +524,130 @@ def test_public_boundary_and_private_admin_remain_separate(setup):
     assert private.get('/admin/login').status_code == 200
     csrf = login(private)
     assert csrf
+
+
+def test_public_qr_matches_private_downloads_and_publication_state(setup):
+    from library.main import create_public_app
+
+    private, store = setup
+    doc_id = add(store, '公共二维码企业')
+    url = f'/d/{doc_id:04d}/qr.png'
+    before = private.get(url).content
+    with TestClient(create_public_app(store.cfg)) as public:
+        for query in ['', '?download=true', '?label=true&download=true']:
+            response = public.get(url + query)
+            expected = private.get(url + query)
+            assert response.status_code == 200
+            assert response.content == expected.content
+            assert response.headers['content-type'] == 'image/png'
+            assert response.headers.get('content-disposition') == expected.headers.get('content-disposition')
+            assert 'set-cookie' not in response.headers
+            decoded = zxingcpp.read_barcode(Image.open(io.BytesIO(response.content)))
+            assert decoded and decoded.text == f'{store.cfg.base_url}/d/{doc_id:04d}/'
+            head = public.head(url + query)
+            assert head.status_code == 200 and not head.content
+            assert head.headers['content-length'] == str(len(response.content))
+        for method in ['post', 'put', 'patch', 'delete']:
+            assert getattr(public, method)(url).status_code == 405
+        page = public.get(f'/d/{doc_id:04d}/').text
+        assert '企业二维码' in page and '下载二维码 PNG' in page and '下载企业标签' in page
+        assert '/admin/' not in page
+        store.ingest(io.BytesIO(pdf_bytes(500)), '更新.pdf', doc_id)
+        assert public.get(url).content == before
+        pending = store.create_entry('尚未上传的公共企业')
+        assert public.get(f'/d/{pending:04d}/qr.png').status_code == 200
+        with store.db() as db:
+            db.execute('UPDATE documents SET needs_review=1 WHERE id=?', (doc_id,))
+        assert public.get(url).status_code == 404
+        assert private.get(url).status_code == 200
+        with store.db() as db:
+            db.execute('UPDATE documents SET needs_review=0 WHERE id=?', (doc_id,))
+        store.edit(doc_id, active=False)
+        assert public.get(url).status_code == 410
+        assert '企业二维码' not in public.get(f'/d/{doc_id:04d}/').text
+        store.edit(doc_id, active=True)
+        assert public.get(url).content == before
+        store.delete(doc_id)
+        assert public.get(url).status_code == 410
+        store.restore(doc_id)
+        assert public.get(url).status_code == 410
+        store.edit(doc_id, active=True)
+        assert public.get(url).content == before
+        assert public.get('/d/9999/qr.png').status_code == 404
+
+
+def test_admin_qr_prefix_updates_existing_public_app_exports_and_backups(setup, tmp_path):
+    from library.main import create_public_app
+
+    client, store = setup
+    doc_id = add(store, '二维码配置企业')
+    old_row = store.get(doc_id)
+    old_url = store.qr_base_url()
+    assert client.get('/admin/settings').status_code == 401
+    assert client.post('/admin/settings').status_code == 401
+    csrf = login(client)
+    assert '二维码设置' in client.get('/admin/').text
+    assert old_url in client.get('/admin/settings').text
+    data = {'csrf': csrf, 'qr_base_url': 'http://www.handan.tech:9996/', 'previous_base_url': old_url}
+    assert client.post('/admin/settings', data=data).status_code == 400
+    assert store.qr_base_url() == old_url
+    assert client.post('/admin/settings', data={**data, 'csrf': 'bad', 'confirm_url_change': 'yes'}).status_code == 403
+    with TestClient(create_public_app(store.cfg)) as public:
+        assert public.get('/admin/settings').status_code == 404
+        assert public.post('/admin/settings', data=data).status_code == 404
+        response = client.post('/admin/settings', data={**data, 'confirm_url_change': 'yes'})
+        assert response.status_code == 200 and '已保存' in response.text
+        expected_base = 'http://www.handan.tech:9996'
+        expected = f'{expected_base}/d/{doc_id:04d}/'
+        assert Store(store.cfg, initialize=False).qr_base_url() == expected_base
+        assert store.cfg.base_url == old_url
+        assert store.get(doc_id) == old_row
+        assert expected in client.get(f'/admin/documents/{doc_id}').text
+        for suffix in ['', '?label=true&download=true']:
+            result = public.get(f'/d/{doc_id:04d}/qr.png' + suffix)
+            assert result.content == client.get(f'/d/{doc_id:04d}/qr.png' + suffix).content
+            assert zxingcpp.read_barcode(Image.open(io.BytesIO(result.content))).text == expected
+        before = public.get(f'/d/{doc_id:04d}/qr.png').content
+        store.ingest(io.BytesIO(pdf_bytes(500)), '新版.pdf', doc_id)
+        assert public.get(f'/d/{doc_id:04d}/qr.png').content == before
+        assert public.get(f'/d/{doc_id:04d}/file').content == pdf_bytes(500)
+    response = client.post('/admin/export', data={'csrf': csrf, 'doc_id': str(doc_id)})
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+        assert expected in z.read('mapping.csv').decode('utf-8-sig')
+        assert json.loads(z.read('verification.json'))[0]['url'] == expected
+        assert zxingcpp.read_barcode(Image.open(io.BytesIO(z.read('qr/0001.png')))).text == expected
+    backup = store.backup(tmp_path / 'configured-backup')
+    assert Store(Settings(data_dir=backup, secret='restore-' * 8)).qr_base_url() == expected_base
+    assert client.post('/admin/settings', data={**data, 'confirm_url_change': 'yes'}).status_code == 400
+    assert store.qr_base_url() == expected_base
+
+
+def test_qr_prefix_rejects_invalid_roots_and_preserves_formal_binding(setup):
+    from library.qr import check_export
+
+    client, store = setup
+    doc_id = add(store)
+    csrf = login(client)
+    previous = store.qr_base_url()
+    for value in ['', 'www.handan.tech:9996', 'javascript:alert(1)', 'ftp://example.org',
+                  'http://user:pass@example.org', 'http://example.org/d/0001/',
+                  'http://example.org?x=1', 'http://example.org#part', 'http://example.org:99999',
+                  'http://example.org:invalid', 'http://exa mple.org', 'http://example.org\\evil']:
+        response = client.post('/admin/settings', data={'csrf': csrf, 'qr_base_url': value,
+                               'previous_base_url': previous, 'confirm_url_change': 'yes'})
+        assert response.status_code == 400, value
+        assert store.qr_base_url() == previous
+    configured = store.set_qr_base_url('https://reports.example.org', previous)
+    store.cfg.qr_mode = 'production'
+    store.set_setting('verified_base_url', previous)
+    with pytest.raises(ValueError, match='verify-origin'):
+        check_export(store)
+    store.bind_for_print([store.get(doc_id)], configured)
+    with pytest.raises(ValueError, match='正式二维码'):
+        store.set_qr_base_url('https://other.example.org', configured)
+    assert store.qr_base_url() == configured
+    assert store.set_qr_base_url(configured, configured) == configured
 
 
 def test_public_search_is_read_only_even_with_admin_session(setup):

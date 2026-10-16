@@ -27,7 +27,7 @@ server {
     limit_req zone=reports_ip burst=20 nodelay;
     limit_req zone=reports_total burst=100 nodelay;
 
-    location ~ ^/d/[0-9]+/(file)?$ {
+    location ~ ^/d/[0-9]+/(file|qr\.png)?$ {
         limit_except GET { deny all; } # GET 同时允许 HEAD
         proxy_pass http://127.0.0.1:18888;
         proxy_set_header Host $host;
@@ -53,6 +53,6 @@ server {
         proxy_set_header Cookie "";
         proxy_hide_header Set-Cookie;
     }
-    # 后台、二维码生成、健康信息、数据、备份及未知路径一律不公开。
+    # 后台、批量导出、健康信息、数据、备份及未知路径一律不公开。
     location / { return 404; }
 }

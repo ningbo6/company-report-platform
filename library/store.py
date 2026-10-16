@@ -10,6 +10,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pypdf import PdfReader
 
@@ -111,6 +112,42 @@ class Store:
     def set_setting(self, key, value):
         with self.lock(), self.db() as db:
             db.execute('INSERT OR REPLACE INTO settings VALUES (?,?)', (key, value))
+
+    def qr_base_url(self):
+        return self.setting('qr_base_url', self.cfg.base_url)
+
+    @staticmethod
+    def validate_qr_base_url(value):
+        value = value.strip().rstrip('/')
+        try:
+            url = urlsplit(value)
+            if (len(value) > 2048 or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in value)
+                    or '\\' in value or url.scheme not in ('http', 'https') or not url.hostname
+                    or url.username is not None or url.password is not None
+                    or url.path or url.query or url.fragment or '?' in value or '#' in value):
+                raise ValueError
+            if url.port is not None and not 1 <= url.port <= 65535:
+                raise ValueError
+            host = url.hostname.encode('idna').decode('ascii')
+            if any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_:' for c in host):
+                raise ValueError
+        except (ValueError, UnicodeError):
+            raise ValueError('请输入完整的 HTTP 或 HTTPS 网站根地址，可含端口，不含路径、账号或参数') from None
+        return value
+
+    def set_qr_base_url(self, value, previous):
+        value = self.validate_qr_base_url(value)
+        with self.lock(), self.db() as db:
+            settings = dict(db.execute("SELECT key,value FROM settings WHERE key IN ('qr_base_url','printed_base_url')"))
+            if settings.get('qr_base_url', self.cfg.base_url) != previous:
+                raise ValueError('二维码配置刚刚发生变化，请刷新页面后重试')
+            locked = settings.get('printed_base_url')
+            if locked and locked != value:
+                raise ValueError('此地址已用于正式二维码，不能直接更换；请先安排旧地址的迁移与转发')
+            if self.cfg.qr_mode == 'production' and not value.startswith('https://'):
+                raise ValueError('正式二维码必须使用 HTTPS 地址')
+            db.execute('INSERT OR REPLACE INTO settings VALUES (?,?)', ('qr_base_url', value))
+        return value
 
     def list(self, query='', include_disabled=False, include_deleted=False):
         with self.db() as db:
@@ -330,6 +367,9 @@ class Store:
         """Once formally exported, printed company names may not be rebound to another company."""
         with self.lock(), self.db() as db:
             if base_url:
+                configured = db.execute('SELECT value FROM settings WHERE key=?', ('qr_base_url',)).fetchone()
+                if (configured[0] if configured else self.cfg.base_url) != base_url:
+                    raise ValueError('二维码地址前缀刚刚发生变化，请重新导出')
                 old = db.execute('SELECT value FROM settings WHERE key=?', ('printed_base_url',)).fetchone()
                 if old and old[0] != base_url:
                     raise ValueError('域名已用于正式二维码，不能直接更改')

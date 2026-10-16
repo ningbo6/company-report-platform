@@ -28,18 +28,19 @@ def load_logo(path):
     return logo
 
 
-def check_export(store):
+def check_export(store, base_url=None):
     cfg = store.cfg
+    base_url = base_url or store.qr_base_url()
     if cfg.qr_mode == 'production':
-        if not cfg.base_url.startswith('https://'):
+        if not base_url.startswith('https://'):
             raise ValueError('正式二维码必须使用长期 HTTPS 域名')
-        if store.setting('verified_base_url') != cfg.base_url:
+        if store.setting('verified_base_url') != base_url:
             raise ValueError('请先运行 verify-origin，验证正式域名已指向本资料库')
         with load_logo(cfg.logo_path) as logo:
             if not cfg.logo_ready or min(logo.size) < 512:
                 raise ValueError('高清校徽待补充：正式导出需要至少 512×512 的校徽，并设置 LOGO_READY=true')
         locked = store.setting('printed_base_url')
-        if locked and locked != cfg.base_url:
+        if locked and locked != base_url:
             raise ValueError('域名已用于正式二维码，不能直接更改；请先设计旧域名迁移方案')
 
 
@@ -111,8 +112,9 @@ def label_image(code, title):
     return im
 
 
-def _build_bundle(store, output, only_id=None):
+def _build_bundle(store, output, only_id=None, base_url=None):
     cfg = store.cfg
+    base_url = base_url or store.qr_base_url()
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     rows = store.list()
@@ -129,7 +131,7 @@ def _build_bundle(store, output, only_id=None):
     writer.writerow(['编号', '企业名称', '当前原文件名', '固定网址', 'SHA256', '字节数', '模式', '二维码固定编号', '报告状态'])
     verification = []
     with zipfile.ZipFile(package, 'w', compression=zipfile.ZIP_DEFLATED) as z:
-        entries = [(f'{r["catalog_order"] or r["id"]:04d}', r['title'], f'{cfg.base_url}/d/{r["id"]:04d}/', r) for r in rows]
+        entries = [(f'{r["catalog_order"] or r["id"]:04d}', r['title'], f'{base_url}/d/{r["id"]:04d}/', r) for r in rows]
         for number, title, url, row in entries:
             code, svg = make_code(url, cfg.logo_path)
             label = label_image(code, title)
@@ -161,16 +163,17 @@ def _build_bundle(store, output, only_id=None):
     (output / 'mapping.csv').write_bytes(csv_bytes)
     (output / 'verification.json').write_text(json.dumps(verification, ensure_ascii=False, indent=2))
     if not test:
-        store.bind_for_print(rows, cfg.base_url)
+        store.bind_for_print(rows, base_url)
     return package
 
 
 def export_bundle(store, output, only_id=None):
-    check_export(store)
+    base_url = store.qr_base_url()
+    check_export(store, base_url)
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=output, prefix='.building-') as temporary:
-        package = _build_bundle(store, temporary, only_id)
+        package = _build_bundle(store, temporary, only_id, base_url)
         for name in ('mapping.csv', 'verification.json'):
             os.replace(Path(temporary) / name, output / name)
         with zipfile.ZipFile(package) as z:

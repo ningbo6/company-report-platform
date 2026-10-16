@@ -1,0 +1,21 @@
+{% extends 'base.html' %}{% block title %}二维码设置 · 企业画像报告{% endblock %}
+{% block content %}
+<a class="back" href="/admin/">← 返回报告管理</a>
+<section class="panel qr-settings">
+  <h1>二维码设置</h1>
+  <p>设置二维码扫码后访问的网站地址，所有企业使用同一个前缀，企业固定编号保持不变。</p>
+  {% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
+  {% if locked_base_url %}<div class="notice muted">已正式绑定地址：{{ locked_base_url }}。更换前请先安排旧地址的迁移与转发。</div>{% endif %}
+  <form method="post" action="/admin/settings">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="previous_base_url" value="{{ qr_base_url }}">
+    <label for="qr-base-url">二维码地址前缀</label>
+    <input id="qr-base-url" name="qr_base_url" type="url" value="{{ qr_base_url }}" placeholder="http://www.handan.tech:9996" required maxlength="2048" aria-describedby="qr-url-hint">
+    <p class="hint" id="qr-url-hint">填写完整的 http:// 或 https:// 地址，可包含端口，不需要填写 /d/ 或企业编号。</p>
+    <div class="fixed-link panel"><span>当前二维码地址示例</span><code>{{ qr_base_url }}/d/0001/</code></div>
+    <p>保存后，公开端和管理端的二维码预览、单张下载及新导出的 ZIP 立即使用此配置，无需重启。已下载的图片和已张贴的二维码不会自动改变；更换前缀时应保留旧地址可访问，或将旧地址转发到对应的企业页面。</p>
+    <label class="checkbox-label"><input type="checkbox" name="confirm_url_change" value="yes">我已确认旧地址继续可访问，或当前二维码尚未使用。</label>
+    <button type="submit">保存二维码设置</button>
+  </form>
+</section>
+{% endblock %}
